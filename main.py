@@ -5,9 +5,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
+
+from astrbot.api import logger
 
 from .core.compat import initialize_compat
 
@@ -58,8 +59,6 @@ from .utils.audio import cleanup_dir, ensure_dir
 from .utils.extract import CodeAndLinkExtractor
 from .utils.text_sanitizer import PreparedSpeechText, SpeechTextSanitizer
 
-logger = logging.getLogger(__name__)
-
 OUTPUT_MARKER_MODE_EXTRA = "_minimax_tts_output_marker_mode"
 OUTPUT_MARKER_MODE_PRESERVE = "preserve_for_tts"
 OUTPUT_MARKER_MODE_STRIP = "strip_visible"
@@ -79,14 +78,19 @@ class MiniMaxTTSPlugin(Star):
         ensure_dir(TEMP_DIR)
 
     async def terminate(self):
-        for task in list(self._background_tasks):
+        background_tasks = list(self._background_tasks)
+        for task in background_tasks:
             if not task.done():
                 task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
         self._background_tasks.clear()
+
+        # Client-close tasks are finite work: finish them instead of cancelling.
+        client_close_tasks = getattr(self, "_client_close_tasks", [])
+        if client_close_tasks:
+            await asyncio.gather(*list(client_close_tasks), return_exceptions=True)
+        client_close_tasks.clear()
 
         if hasattr(self, "tts_client"):
             try:
@@ -135,7 +139,9 @@ class MiniMaxTTSPlugin(Star):
             language_boost=api_cfg.get("language_boost", ""),
             proxy=api_cfg.get("proxy", ""),
             voice_modify=api_cfg.get("voice_modify", {}),
-            timber_weights=api_cfg.get("timber_weights", api_cfg.get("timbre_weights", [])),
+            timber_weights=api_cfg.get(
+                "timber_weights", api_cfg.get("timbre_weights", [])
+            ),
             subtitle_enable=api_cfg.get("subtitle_enable", False),
             pronunciation_dict=api_cfg.get("pronunciation_dict", {}),
             aigc_watermark=api_cfg.get("aigc_watermark", False),
@@ -263,26 +269,35 @@ class MiniMaxTTSPlugin(Star):
     def _get_session_state(self, sid: str) -> SessionState:
         return self._session_state.setdefault(sid, SessionState())
 
-    def _track_background_task(self, coro, name: str) -> None:
+    def _track_background_task(
+        self, coro, name: str, *, tracked_tasks: Optional[List[asyncio.Task]] = None
+    ) -> None:
+        if tracked_tasks is None:
+            tracked_tasks = self._background_tasks
         task = asyncio.create_task(coro, name=name)
-        self._background_tasks.append(task)
+        tracked_tasks.append(task)
 
         def _cleanup_done(done_task: asyncio.Task) -> None:
             try:
-                self._background_tasks.remove(done_task)
+                tracked_tasks.remove(done_task)
             except ValueError:
                 pass
 
         task.add_done_callback(_cleanup_done)
 
     def _schedule_client_close(self, client: Any) -> None:
+        if not hasattr(self, "_client_close_tasks"):
+            self._client_close_tasks: List[asyncio.Task] = []
+
         async def _close() -> None:
             try:
                 await client.close()
             except Exception:
                 logger.debug("close stale tts client failed", exc_info=True)
 
-        self._track_background_task(_close(), "close_stale_minimax_tts")
+        self._track_background_task(
+            _close(), "close_stale_minimax_tts", tracked_tasks=self._client_close_tasks
+        )
 
     async def _start_background_tasks(self) -> None:
         if self._cleanup_task_started:
@@ -326,7 +341,9 @@ class MiniMaxTTSPlugin(Star):
                 reverse=True,
             )[:SESSION_MAX_COUNT]
             allowed_ids = {sid for sid, _ in keep}
-            stale_sessions.update(sid for sid in self._session_state if sid not in allowed_ids)
+            stale_sessions.update(
+                sid for sid in self._session_state if sid not in allowed_ids
+            )
 
         for sid in stale_sessions:
             self._session_state.pop(sid, None)
@@ -369,7 +386,9 @@ class MiniMaxTTSPlugin(Star):
             model=str(api_cfg.get("model", "")),
         )
 
-    def _build_record_only_chain(self, original_chain: List, audio_paths: List[str]) -> List:
+    def _build_record_only_chain(
+        self, original_chain: List, audio_paths: List[str]
+    ) -> List:
         chain: List = [Record(file=path) for path in audio_paths]
         for comp in original_chain:
             if not isinstance(comp, Plain):
@@ -380,7 +399,9 @@ class MiniMaxTTSPlugin(Star):
         return (
             self.segmented_tts_enabled
             and self.config.is_segmented_output_enabled_for_umo(sid)
-            and self.segmented_tts_processor.should_use_segmented(text, self.segmented_min_chars)
+            and self.segmented_tts_processor.should_use_segmented(
+                text, self.segmented_min_chars
+            )
         )
 
     def _build_minimax_guidance_instruction(self) -> str:
@@ -396,16 +417,6 @@ class MiniMaxTTSPlugin(Star):
         else:
             lines.append("当前模型不要输出 MiniMax 语气标签，例如 (laughs)。")
         return "\n".join(lines)
-
-    def _build_llm_tool_instruction(self) -> str:
-        return (
-            "普通回复保持文字，不会自动转成语音，也不要求每轮使用语音。"
-            "结合当前交流、已知状态和用户意愿，仅在决定发送语音时调用 `tts_speak`。"
-            "用户要求打字或不方便听时使用文字。"
-            "参数 `text` 是实际说给对方听的话，不把这条语音描述成正在打字。"
-            "语音的停顿或语气标签只用于工具参数，不用于普通文字回复。"
-            "长内容按插件配置分段发送；根据工具结果判断是否送达，成功后不重复发送同一段文字。"
-        )
 
     def _current_tts_model(self) -> str:
         api_cfg = self.config.get_api_config()
@@ -448,7 +459,11 @@ class MiniMaxTTSPlugin(Star):
                 if seg.audio_path
             ]
             if audio_paths:
-                return True, [Record(file=path) for path in audio_paths], prepared.display_text or tts_text
+                return (
+                    True,
+                    [Record(file=path) for path in audio_paths],
+                    prepared.display_text or tts_text,
+                )
             return False, [], f"TTS 合成失败：{seg_res.error or '分段合成失败'}"
 
         proc_res = await self.tts_processor.process(tts_text, st)
@@ -461,12 +476,6 @@ class MiniMaxTTSPlugin(Star):
     async def on_llm_request(self, event: AstrMessageEvent, request):
         try:
             self._publish_output_marker_mode(event)
-            if not hasattr(filter, "llm_tool"):
-                return
-            sp = getattr(request, "system_prompt", "") or ""
-            guidance = self._build_llm_tool_instruction()
-            if guidance not in sp:
-                request.system_prompt = "\n".join(part for part in [guidance, sp] if part)
         except Exception:
             logger.error("on_llm_request failed", exc_info=True)
 
@@ -501,7 +510,10 @@ class MiniMaxTTSPlugin(Star):
             try:
                 is_llm_response = result.is_llm_result()
             except Exception:
-                is_llm_response = getattr(result, "result_content_type", None) == ResultContentType.LLM_RESULT
+                is_llm_response = (
+                    getattr(result, "result_content_type", None)
+                    == ResultContentType.LLM_RESULT
+                )
             if not is_llm_response:
                 return
             if not hasattr(result, "chain") or result.chain is None:
@@ -522,7 +534,11 @@ class MiniMaxTTSPlugin(Star):
                 cleaned_chain.append(comp)
         result.chain = cleaned_chain
 
-        text_parts = [c.text.strip() for c in result.chain if isinstance(c, Plain) and c.text.strip()]
+        text_parts = [
+            c.text.strip()
+            for c in result.chain
+            if isinstance(c, Plain) and c.text.strip()
+        ]
         if not text_parts:
             return
 
@@ -530,14 +546,18 @@ class MiniMaxTTSPlugin(Star):
         if not self.config.is_voice_output_enabled_for_umo(sid):
             return
 
-        prepared = self._prepare_text_for_tts(self._normalize_text(" ".join(text_parts)))
+        prepared = self._prepare_text_for_tts(
+            self._normalize_text(" ".join(text_parts))
+        )
         tts_text = (prepared.tts_text or "").strip()
         if not tts_text:
             return
 
         st = self._get_session_state(sid)
         allowed_components = {"Plain", "At", "Reply", "Image", "Face"}
-        has_non_plain = any(type(comp).__name__ not in allowed_components for comp in result.chain)
+        has_non_plain = any(
+            type(comp).__name__ not in allowed_components for comp in result.chain
+        )
         check_res = self.condition_checker.check_all(
             tts_text,
             st,
@@ -562,12 +582,16 @@ class MiniMaxTTSPlugin(Star):
                     if seg.audio_path
                 ]
                 if audio_paths:
-                    result.chain = self._build_record_only_chain(result.chain, audio_paths)
+                    result.chain = self._build_record_only_chain(
+                        result.chain, audio_paths
+                    )
                     return
 
             proc_res = await self.tts_processor.process(tts_text, st)
             if proc_res.success and proc_res.audio_path:
-                audio_path = self.tts_processor.normalize_audio_path(proc_res.audio_path)
+                audio_path = self.tts_processor.normalize_audio_path(
+                    proc_res.audio_path
+                )
                 result.chain = self._build_record_only_chain(result.chain, [audio_path])
         finally:
             self._inflight_sigs.pop(sig, None)
@@ -601,7 +625,9 @@ class MiniMaxTTSPlugin(Star):
 
     @filter.command("tts_on", priority=1)
     async def tts_on(self, event: AstrMessageEvent):
-        yield event.plain_result("本版本已禁用自动文字转语音；仍可通过 tts_speak 工具或 tts_say 指令发送语音。")
+        yield event.plain_result(
+            "本版本已禁用自动文字转语音；仍可通过 tts_speak 工具或 tts_say 指令发送语音。"
+        )
 
     @filter.command("tts_off", priority=1)
     async def tts_off(self, event: AstrMessageEvent):
@@ -610,7 +636,9 @@ class MiniMaxTTSPlugin(Star):
 
     @filter.command("tts_all_on", priority=1)
     async def tts_all_on(self, event: AstrMessageEvent):
-        yield event.plain_result("本版本已禁用自动文字转语音；仍可通过 tts_speak 工具或 tts_say 指令发送语音。")
+        yield event.plain_result(
+            "本版本已禁用自动文字转语音；仍可通过 tts_speak 工具或 tts_say 指令发送语音。"
+        )
 
     @filter.command("tts_all_off", priority=1)
     async def tts_all_off(self, event: AstrMessageEvent):
@@ -654,6 +682,13 @@ class MiniMaxTTSPlugin(Star):
         async def tts_speak(self, event: AstrMessageEvent, text: str):
             """让大模型主动发送语音消息，长内容按配置逐段发送。
 
+            普通回复保持文字，不会自动转成语音，也不要求每轮使用语音。
+            结合当前交流、已知状态和用户意愿，仅在决定发送语音时调用 `tts_speak`。
+            用户要求打字或不方便听时使用文字。
+            参数 `text` 是实际说给对方听的话，不把这条语音描述成正在打字。
+            语音的停顿或语气标签只用于工具参数，不用于普通文字回复。
+            长内容按插件配置分段发送；根据工具结果判断是否送达，成功后不重复发送同一段文字。
+
             Args:
                 text(string): 需要转成语音并发送的文本。
 
@@ -675,10 +710,9 @@ class MiniMaxTTSPlugin(Star):
             st = self._get_session_state(sid)
 
             if self._should_use_segmented_tts(sid, tts_text):
+
                 async def _send_segment(audio_path) -> bool:
-                    await event.send(
-                        event.chain_result([Record(file=str(audio_path))])
-                    )
+                    await event.send(event.chain_result([Record(file=str(audio_path))]))
                     return True
 
                 seg_res = await self.segmented_tts_processor.process_and_send(
@@ -699,7 +733,9 @@ class MiniMaxTTSPlugin(Star):
                         failed_count,
                     )
             else:
-                ok, chain, error_message = await self._build_manual_tts_chain(event, content)
+                ok, chain, error_message = await self._build_manual_tts_chain(
+                    event, content
+                )
                 if not ok:
                     yield error_message
                     return
@@ -725,12 +761,18 @@ class MiniMaxTTSPlugin(Star):
         umo = self._get_umo(event)
         policy = self.config.get_feature_policy("segmented_output")
         if not bool(policy.get("enable", False)):
-            await self.config.set_feature_policy_async("segmented_output", {"enable": True})
+            await self.config.set_feature_policy_async(
+                "segmented_output", {"enable": True}
+            )
             policy = self.config.get_feature_policy("segmented_output")
         if policy.get("mode") == "whitelist":
-            await self.config.add_umo_to_feature("segmented_output", umo, "enabled_umos")
+            await self.config.add_umo_to_feature(
+                "segmented_output", umo, "enabled_umos"
+            )
         else:
-            await self.config.remove_umo_from_feature("segmented_output", umo, "disabled_umos")
+            await self.config.remove_umo_from_feature(
+                "segmented_output", umo, "disabled_umos"
+            )
         self._update_components_from_config()
         yield event.plain_result(f"当前会话已开启分段语音。UMO={umo}")
 
@@ -739,11 +781,17 @@ class MiniMaxTTSPlugin(Star):
         umo = self._get_umo(event)
         policy = self.config.get_feature_policy("segmented_output")
         if not bool(policy.get("enable", False)):
-            await self.config.set_feature_policy_async("segmented_output", {"enable": True})
+            await self.config.set_feature_policy_async(
+                "segmented_output", {"enable": True}
+            )
             policy = self.config.get_feature_policy("segmented_output")
         if policy.get("mode") == "whitelist":
-            await self.config.remove_umo_from_feature("segmented_output", umo, "enabled_umos")
+            await self.config.remove_umo_from_feature(
+                "segmented_output", umo, "enabled_umos"
+            )
         else:
-            await self.config.add_umo_to_feature("segmented_output", umo, "disabled_umos")
+            await self.config.add_umo_to_feature(
+                "segmented_output", umo, "disabled_umos"
+            )
         self._update_components_from_config()
         yield event.plain_result(f"当前会话已关闭分段语音。UMO={umo}")
