@@ -1,0 +1,71 @@
+{
+  "api_key": {
+    "description": "API Key",
+    "type": "string",
+    "default": "",
+    "secret": true,
+    "show_key": false
+  },
+  "voice_id": {
+    "description": "音色",
+    "type": "string",
+    "default": "minizhizhi",
+    "options": [
+      "minizhizhi"
+    ],
+    "labels": [
+      "小乌鸦"
+    ],
+    "show_key": false
+  },
+  "volume": {
+    "description": "音量倍数",
+    "type": "float",
+    "default": 1.0,
+    "show_key": false
+  },
+  "language": {
+    "description": "语言",
+    "type": "string",
+    "default": "",
+    "options": [
+      "",
+      "auto",
+      "Chinese",
+      "Chinese,Yue",
+      "English",
+      "Japanese",
+      "Korean",
+      "French",
+      "German",
+      "Spanish",
+      "Russian",
+      "Portuguese",
+      "Italian",
+      "Thai",
+      "Vietnamese",
+      "Indonesian",
+      "Arabic"
+    ],
+    "labels": [
+      "不启用语言增强",
+      "自动识别",
+      "中文（普通话）",
+      "中文／粤语",
+      "英语",
+      "日语",
+      "韩语",
+      "法语",
+      "德语",
+      "西班牙语",
+      "俄语",
+      "葡萄牙语",
+      "意大利语",
+      "泰语",
+      "越南语",
+      "印度尼西亚语",
+      "阿拉伯语"
+    ],
+    "show_key": false
+  }
+}
