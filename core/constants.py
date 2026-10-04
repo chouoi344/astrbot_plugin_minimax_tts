@@ -4,19 +4,26 @@
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
 
+from astrbot.api.star import StarTools
+
 
 # Plugin metadata
 PLUGIN_ID = "astrbot_plugin_minimax_tts"
 PLUGIN_NAME = "MiniMax 语音助手"
-PLUGIN_DESC = "通过终逢小站调用 MiniMax，内置角色音色，支持高质量语音、分段发送和语言选择。"
-PLUGIN_VERSION = "0.1.9"
+PLUGIN_DESC = (
+    "通过终逢小站调用 MiniMax，内置角色音色，支持高质量语音、分段发送和语言选择。"
+)
+PLUGIN_VERSION = "0.1.10"
 PLUGIN_AUTHOR = "臭屁"
 
 # Paths
 PLUGIN_DIR = Path(__file__).parent.parent
-CONFIG_FILE = PLUGIN_DIR / "config.json"
-RUNTIME_CONFIG_FILE = PLUGIN_DIR / "runtime_config.json"
-TEMP_DIR = PLUGIN_DIR / "temp"
+DATA_DIR = Path(StarTools.get_data_dir(PLUGIN_ID))
+CONFIG_FILE = DATA_DIR / "config.json"
+RUNTIME_CONFIG_FILE = DATA_DIR / "runtime_config.json"
+TEMP_DIR = DATA_DIR / "temp"
+# Read-only compatibility source for policies saved by earlier versions.
+LEGACY_RUNTIME_CONFIG_FILE = PLUGIN_DIR / "runtime_config.json"
 
 # Emotion constants
 EMOTIONS: Tuple[str, ...] = ("happy", "sad", "angry", "neutral")

@@ -6,9 +6,10 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
-import logging
 import math
 from typing import Any, Dict, List, Optional, Union
+
+from astrbot.api import logger
 
 from .constants import (
     CONFIG_FILE,
@@ -35,11 +36,10 @@ from .constants import (
     DEFAULT_TEXT_MIN_LIMIT,
     DEFAULT_TTS_PROVIDER,
     DEFAULT_VOICE_OUTPUT_ENABLE,
+    LEGACY_RUNTIME_CONFIG_FILE,
     RUNTIME_CONFIG_FILE,
     VOICE_PRESETS,
 )
-
-logger = logging.getLogger(__name__)
 
 FEATURE_VOICE_OUTPUT = "voice_output"
 FEATURE_SEGMENTED = "segmented_output"
@@ -105,7 +105,13 @@ class ConfigManager:
     """Supports AstrBotConfig and local JSON fallback."""
 
     VISIBLE_KEYS = ("api_key", "voice_id", "volume", "language")
-    RUNTIME_KEYS = ("feature_policies", "text_limit", "text_min_limit", "cooldown", "segmented_tts")
+    RUNTIME_KEYS = (
+        "feature_policies",
+        "text_limit",
+        "text_min_limit",
+        "cooldown",
+        "segmented_tts",
+    )
 
     def __init__(self, config: Optional[Any] = None):
         self._is_astrbot_config = False
@@ -114,6 +120,7 @@ class ConfigManager:
 
         try:
             from astrbot.core.config.astrbot_config import AstrBotConfig
+
             if isinstance(config, AstrBotConfig):
                 self._is_astrbot_config = True
                 self._config = config
@@ -125,9 +132,14 @@ class ConfigManager:
         # Keep internal command policies out of the four-field WebUI object.
         self._settings = self._config
         self._config = copy.deepcopy(dict(self._settings))
-        if RUNTIME_CONFIG_FILE.exists():
+        runtime_file = (
+            RUNTIME_CONFIG_FILE
+            if RUNTIME_CONFIG_FILE.exists()
+            else LEGACY_RUNTIME_CONFIG_FILE
+        )
+        if runtime_file.exists():
             try:
-                runtime = json.loads(RUNTIME_CONFIG_FILE.read_text(encoding="utf-8"))
+                runtime = json.loads(runtime_file.read_text(encoding="utf-8"))
                 if isinstance(runtime, dict):
                     for key in self.RUNTIME_KEYS:
                         if key in runtime and key not in self._config:
@@ -147,7 +159,14 @@ class ConfigManager:
 
     async def save_async(self) -> None:
         async with self._save_lock:
-            runtime = {key: self._config[key] for key in self.RUNTIME_KEYS if key in self._config}
+            runtime = {
+                key: self._config[key]
+                for key in self.RUNTIME_KEYS
+                if key in self._config
+            }
+            await asyncio.to_thread(
+                RUNTIME_CONFIG_FILE.parent.mkdir, parents=True, exist_ok=True
+            )
             await asyncio.to_thread(
                 RUNTIME_CONFIG_FILE.write_text,
                 json.dumps(runtime, ensure_ascii=False, indent=2),
@@ -158,11 +177,14 @@ class ConfigManager:
                     await asyncio.to_thread(self._settings.save_config)
                 return
             try:
+
                 def _write():
+                    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
                     CONFIG_FILE.write_text(
                         json.dumps(self._settings, ensure_ascii=False, indent=2),
                         encoding="utf-8",
                     )
+
                 await asyncio.to_thread(_write)
             except Exception as e:
                 logger.error("Save config failed: %s", e)
@@ -329,7 +351,9 @@ class ConfigManager:
         defaults["enable"] = bool(defaults.get("enable", False))
         return defaults
 
-    async def set_feature_policy_async(self, feature: str, policy: Dict[str, Any]) -> None:
+    async def set_feature_policy_async(
+        self, feature: str, policy: Dict[str, Any]
+    ) -> None:
         if feature not in VALID_FEATURES:
             return
         merged = self.get_feature_policy(feature)
@@ -362,13 +386,17 @@ class ConfigManager:
     # UMO list mutation (unified for all features)
     # ------------------------------------------------------------------
 
-    async def add_umo_to_feature(self, feature: str, umo: str, list_name: str = "enabled_umos") -> None:
+    async def add_umo_to_feature(
+        self, feature: str, umo: str, list_name: str = "enabled_umos"
+    ) -> None:
         policy = self.get_feature_policy(feature)
         if umo not in policy[list_name]:
             policy[list_name].append(umo)
             await self.set_feature_policy_async(feature, policy)
 
-    async def remove_umo_from_feature(self, feature: str, umo: str, list_name: str = "enabled_umos") -> None:
+    async def remove_umo_from_feature(
+        self, feature: str, umo: str, list_name: str = "enabled_umos"
+    ) -> None:
         policy = self.get_feature_policy(feature)
         if umo in policy[list_name]:
             policy[list_name].remove(umo)
@@ -402,10 +430,14 @@ class ConfigManager:
         return str(api_cfg.get("default_voice", "") or "")
 
     def get_api_config(self) -> Dict[str, Any]:
-        voice_id = str(self.get("voice_id", DEFAULT_MINIMAX_VOICE_ID) or DEFAULT_MINIMAX_VOICE_ID).strip()
+        voice_id = str(
+            self.get("voice_id", DEFAULT_MINIMAX_VOICE_ID) or DEFAULT_MINIMAX_VOICE_ID
+        ).strip()
         if voice_id not in VOICE_PRESETS:
             raise ValueError("请在插件设置中重新选择音色")
-        volume = _safe_float(self.get("volume", DEFAULT_MINIMAX_VOL), DEFAULT_MINIMAX_VOL)
+        volume = _safe_float(
+            self.get("volume", DEFAULT_MINIMAX_VOL), DEFAULT_MINIMAX_VOL
+        )
         if not math.isfinite(volume) or not 0 < volume <= 10:
             raise ValueError("音量倍数必须大于 0 且不超过 10")
         return {
@@ -422,7 +454,9 @@ class ConfigManager:
             "bitrate": DEFAULT_MINIMAX_BITRATE,
             "channel": DEFAULT_MINIMAX_CHANNEL,
             "output_format": DEFAULT_MINIMAX_OUTPUT_FORMAT,
-            "language_boost": str(self.get("language", DEFAULT_MINIMAX_LANGUAGE_BOOST) or "").strip(),
+            "language_boost": str(
+                self.get("language", DEFAULT_MINIMAX_LANGUAGE_BOOST) or ""
+            ).strip(),
             "timeout": DEFAULT_API_TIMEOUT,
             "max_retries": DEFAULT_API_MAX_RETRIES,
             "default_voice": voice_id,
@@ -471,7 +505,9 @@ class ConfigManager:
         return _safe_int(self.get("text_limit", DEFAULT_TEXT_LIMIT), DEFAULT_TEXT_LIMIT)
 
     def get_text_min_limit(self) -> int:
-        return _safe_int(self.get("text_min_limit", DEFAULT_TEXT_MIN_LIMIT), DEFAULT_TEXT_MIN_LIMIT)
+        return _safe_int(
+            self.get("text_min_limit", DEFAULT_TEXT_MIN_LIMIT), DEFAULT_TEXT_MIN_LIMIT
+        )
 
     def get_cooldown(self) -> int:
         return _safe_int(self.get("cooldown", DEFAULT_COOLDOWN), DEFAULT_COOLDOWN)
@@ -481,7 +517,9 @@ class ConfigManager:
     # ------------------------------------------------------------------
 
     async def set_voice_output_enable_async(self, enable: bool) -> None:
-        await self.set_feature_policy_async(FEATURE_VOICE_OUTPUT, {"enable": bool(enable)})
+        await self.set_feature_policy_async(
+            FEATURE_VOICE_OUTPUT, {"enable": bool(enable)}
+        )
 
     async def set_marker_enable_async(self, enable: bool) -> None:
         route = self.get("emotion_route", {}) or {}
@@ -517,7 +555,9 @@ class ConfigManager:
         return _safe_int(self.get_segmented_tts_config().get("min_segment_chars"), 3)
 
     def get_segmented_tts_split_pattern(self) -> str:
-        return str(self.get_segmented_tts_config().get("split_pattern", r"[。？！!?\n…]+"))
+        return str(
+            self.get_segmented_tts_config().get("split_pattern", r"[。？！!?\n…]+")
+        )
 
     def get_segmented_tts_min_segment_length(self) -> int:
         return _safe_int(
