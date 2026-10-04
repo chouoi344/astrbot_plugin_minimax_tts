@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import json
-import logging
+from astrbot.api import logger
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,7 +17,6 @@ from ..core.constants import (
 )
 from ..utils.extract import CodeAndLinkExtractor, INLINE_CODE_EXCLUSIONS
 
-logger = logging.getLogger(__name__)
 
 DEFAULT_MEME_JSON_PATH = PLUGIN_DIR.parent.parent / "memes_data" / "memes_data.json"
 DEFAULT_MEME_DIR = PLUGIN_DIR.parent.parent / "memes_data" / "memes"
@@ -71,12 +70,18 @@ class SpeechTextSanitizer:
         cleaned_text = self.marker_processor.strip_all_visible_markers(cleaned_text)
 
         meme_cleaned_text, meme_tags = self._strip_meme_tags(cleaned_text)
-        display_base, pause_tags = self._handle_pause_tags(meme_cleaned_text, keep=False)
+        display_base, pause_tags = self._handle_pause_tags(
+            meme_cleaned_text, keep=False
+        )
         display_base, voice_tags = self._handle_voice_tags(display_base, keep=False)
 
         keep_minimax_controls = self._should_keep_minimax_controls(provider)
-        keep_voice_tags = keep_minimax_controls and self._supports_expressive_tags(model)
-        tts_base, _ = self._handle_pause_tags(meme_cleaned_text, keep=keep_minimax_controls)
+        keep_voice_tags = keep_minimax_controls and self._supports_expressive_tags(
+            model
+        )
+        tts_base, _ = self._handle_pause_tags(
+            meme_cleaned_text, keep=keep_minimax_controls
+        )
         tts_base, _ = self._handle_voice_tags(tts_base, keep=keep_voice_tags)
 
         display_processed = self.extractor.process_text(display_base)
@@ -85,7 +90,9 @@ class SpeechTextSanitizer:
             preserve_linebreaks=keep_minimax_controls,
         )
 
-        display_text = self._cleanup_visible_text(display_processed.clean_text, keep_newlines=True)
+        display_text = self._cleanup_visible_text(
+            display_processed.clean_text, keep_newlines=True
+        )
         tts_text = self._cleanup_visible_text(
             tts_processed.speak_text,
             keep_newlines=keep_minimax_controls,
@@ -127,7 +134,9 @@ class SpeechTextSanitizer:
         filtered: List[str] = []
         for code in codes:
             inner = self._inline_code_inner(code)
-            if inner and any(pattern.match(inner) for pattern in _REFERENCE_CODE_EXCLUSION_RES):
+            if inner and any(
+                pattern.match(inner) for pattern in _REFERENCE_CODE_EXCLUSION_RES
+            ):
                 continue
             filtered.append(code)
         return filtered
@@ -142,7 +151,10 @@ class SpeechTextSanitizer:
         elif dir_path.exists():
             current_mtime = dir_path.stat().st_mtime
 
-        if self._meme_tags_cache is not None and current_mtime == self._meme_tags_cache_mtime:
+        if (
+            self._meme_tags_cache is not None
+            and current_mtime == self._meme_tags_cache_mtime
+        ):
             return self._meme_tags_cache
 
         tags: set[str] = set()
@@ -155,7 +167,9 @@ class SpeechTextSanitizer:
                         if isinstance(key, str) and key.strip():
                             tags.add(key.strip().lower())
             except Exception:
-                logger.warning("load meme tags from json failed: %s", json_path, exc_info=True)
+                logger.warning(
+                    "load meme tags from json failed: %s", json_path, exc_info=True
+                )
 
         if not tags and dir_path.exists():
             try:
@@ -163,7 +177,9 @@ class SpeechTextSanitizer:
                     if path.is_dir() and path.name.strip():
                         tags.add(path.name.strip().lower())
             except Exception:
-                logger.warning("load meme tags from dir failed: %s", dir_path, exc_info=True)
+                logger.warning(
+                    "load meme tags from dir failed: %s", dir_path, exc_info=True
+                )
 
         self._meme_tags_cache = tags
         self._meme_tags_cache_mtime = current_mtime
