@@ -3,7 +3,7 @@ import base64
 import copy
 import hashlib
 import json
-import logging
+from astrbot.api import logger
 import tempfile
 import weakref
 from pathlib import Path
@@ -12,9 +12,6 @@ from typing import Any, Optional
 import aiohttp
 
 from ..utils.audio import validate_audio_file
-
-
-logger = logging.getLogger(__name__)
 
 
 class MiniMaxTTS:
@@ -67,7 +64,9 @@ class MiniMaxTTS:
         self.transport_mode = "sync_http"
         self.last_response_meta: Optional[dict[str, Any]] = None
         self._session: Optional[aiohttp.ClientSession] = None
-        self._cache_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+        self._cache_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
 
     async def close(self):
         if self._session:
@@ -149,7 +148,11 @@ class MiniMaxTTS:
         body = data.get("data", {}) or {}
         extra_info = body.get("extra_info")
         if not isinstance(extra_info, dict):
-            extra_info = data.get("extra_info") if isinstance(data.get("extra_info"), dict) else {}
+            extra_info = (
+                data.get("extra_info")
+                if isinstance(data.get("extra_info"), dict)
+                else {}
+            )
 
         return {
             "status_code": (data.get("base_resp") or {}).get("status_code"),
@@ -160,7 +163,9 @@ class MiniMaxTTS:
         }
 
     def _log_response_meta(self, meta: dict[str, Any]) -> None:
-        compact_meta = {key: value for key, value in meta.items() if value not in (None, "", [], {})}
+        compact_meta = {
+            key: value for key, value in meta.items() if value not in (None, "", [], {})
+        }
         if compact_meta:
             logger.info("MiniMaxTTS response meta: %s", compact_meta)
 
@@ -176,13 +181,21 @@ class MiniMaxTTS:
             return None
         out_dir.mkdir(parents=True, exist_ok=True)
         payload = self._build_sync_http_payload(
-            text, voice=voice or self.voice_id,
+            text,
+            voice=voice or self.voice_id,
             speed=float(speed) if speed is not None else self.speed,
         )
-        cache_key = hashlib.sha256(json.dumps(
-            {"url": self.api_url, "credential": hashlib.sha256(self.api_key.encode()).hexdigest(),
-             "payload": payload}, ensure_ascii=False, sort_keys=True,
-        ).encode("utf-8")).hexdigest()[:32]
+        cache_key = hashlib.sha256(
+            json.dumps(
+                {
+                    "url": self.api_url,
+                    "credential": hashlib.sha256(self.api_key.encode()).hexdigest(),
+                    "payload": payload,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()[:32]
         out_path = out_dir / f"{cache_key}.{self.format}"
         lock = self._cache_locks.setdefault(cache_key, asyncio.Lock())
         async with lock:
@@ -192,8 +205,13 @@ class MiniMaxTTS:
                 out_path.unlink(missing_ok=True)
             return await self._synth_uncached(payload, out_path)
 
-    async def _synth_uncached(self, payload: dict[str, Any], out_path: Path) -> Optional[Path]:
-        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+    async def _synth_uncached(
+        self, payload: dict[str, Any], out_path: Path
+    ) -> Optional[Path]:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
         await self._ensure_session()
         temp_path = None
         last_error = "no response"
@@ -201,12 +219,15 @@ class MiniMaxTTS:
             try:
                 assert self._session is not None
                 async with self._session.post(
-                    self.api_url, headers=headers, json=payload, proxy=self.proxy,
+                    self.api_url,
+                    headers=headers,
+                    json=payload,
+                    proxy=self.proxy,
                     allow_redirects=False,
                 ) as resp:
                     self.last_response_meta = {"http_status": resp.status}
                     if resp.status == 429 and attempt < self.max_retries:
-                        await asyncio.sleep(min(2 ** attempt, 8))
+                        await asyncio.sleep(min(2**attempt, 8))
                         continue
                     if not 200 <= resp.status < 300:
                         last_error = f"http {resp.status}"
@@ -217,11 +238,16 @@ class MiniMaxTTS:
                         last_error = "empty audio response"
                         break
                     with tempfile.NamedTemporaryFile(
-                        dir=out_path.parent, prefix="tts_", suffix=f".{self.format}", delete=False,
+                        dir=out_path.parent,
+                        prefix="tts_",
+                        suffix=f".{self.format}",
+                        delete=False,
                     ) as temp_file:
                         temp_path = Path(temp_file.name)
                     await self._write_bytes(temp_path, raw)
-                    if not await validate_audio_file(temp_path, expected_format=self.format):
+                    if not await validate_audio_file(
+                        temp_path, expected_format=self.format
+                    ):
                         last_error = "relay did not return valid PCM WAV audio"
                         break
                     await asyncio.to_thread(temp_path.replace, out_path)
@@ -233,7 +259,7 @@ class MiniMaxTTS:
                 # completed synthesis. Never retry read timeouts/5xx/parsing.
                 last_error = "connection failed"
                 if attempt < self.max_retries:
-                    await asyncio.sleep(min(2 ** attempt, 8))
+                    await asyncio.sleep(min(2**attempt, 8))
                     continue
                 break
             except Exception as exc:
