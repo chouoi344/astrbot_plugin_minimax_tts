@@ -1,4 +1,4 @@
-# MiniMax 语音助手 v0.1.10
+# MiniMax 语音助手 v0.1.11
 
 通过终逢小站调用 MiniMax，填写中转站 API Key 即可使用内置音色。
 
@@ -31,6 +31,12 @@
 ## 原项目与许可
 
 本插件基于木有知（muyouzhi6）的 [情绪路由插件](https://github.com/muyouzhi6/astrbot_plugin_tts_emotion_router) 修改。原项目 README 和元数据声明 MIT 许可；本项目沿用 MIT 许可，许可正文见 [LICENSE](LICENSE)。
+
+## v0.1.11 更新说明
+
+- 新增“小苹果”音色，默认音色仍为“小乌鸦”。
+- 在插件设置的“音色”下拉框中选择“小苹果”即可使用。
+- 保留四项设置、语音质量参数、工具指令与分段发送逻辑。
 
 ## v0.1.10 更新说明
 

@@ -11,10 +11,12 @@
     "type": "string",
     "default": "minizhizhi",
     "options": [
-      "minizhizhi"
+      "minizhizhi",
+      "minigege"
     ],
     "labels": [
-      "小乌鸦"
+      "小乌鸦",
+      "小苹果"
     ],
     "show_key": false
   },
