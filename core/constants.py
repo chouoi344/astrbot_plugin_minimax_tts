@@ -13,7 +13,7 @@ PLUGIN_NAME = "MiniMax 语音助手"
 PLUGIN_DESC = (
     "通过终逢小站调用 MiniMax，内置角色音色，支持高质量语音、分段发送和语言选择。"
 )
-PLUGIN_VERSION = "0.1.10"
+PLUGIN_VERSION = "0.1.11"
 PLUGIN_AUTHOR = "臭屁"
 
 # Paths
@@ -73,7 +73,7 @@ DEFAULT_TTS_PROVIDER: str = "minimax"
 DEFAULT_MINIMAX_URL: str = "https://choupi.tech/v1/audio/speech"
 DEFAULT_MINIMAX_MODEL: str = "speech-2.8-hd"
 DEFAULT_MINIMAX_VOICE_ID: str = "minizhizhi"
-VOICE_PRESETS: Dict[str, str] = {"minizhizhi": "小乌鸦"}
+VOICE_PRESETS: Dict[str, str] = {"minizhizhi": "小乌鸦", "minigege": "小苹果"}
 DEFAULT_MINIMAX_VOL: float = 1.0
 DEFAULT_MINIMAX_PITCH: int = 0
 DEFAULT_MINIMAX_BITRATE: int = 256000
