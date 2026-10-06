@@ -12,11 +12,17 @@
     "default": "minizhizhi",
     "options": [
       "minizhizhi",
-      "minigege"
+      "minigege",
+      "minihuajia",
+      "minixiaohui",
+      "miniyisheng"
     ],
     "labels": [
       "小乌鸦",
-      "小苹果"
+      "小苹果",
+      "小鸭子",
+      "小兔子",
+      "小雪人"
     ],
     "show_key": false
   },

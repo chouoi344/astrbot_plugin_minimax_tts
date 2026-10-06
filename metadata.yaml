@@ -1,6 +1,6 @@
 name: astrbot_plugin_minimax_tts
 author: 臭屁
-version: 0.1.11
+version: 0.1.12
 desc: "通过终逢小站调用 MiniMax，内置角色音色，支持高质量音频、工具主动语音和分段语音。"
 repo: https://github.com/chouoi344/astrbot_plugin_minimax_tts
 entry: main.py
