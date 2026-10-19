@@ -1,2 +1,4 @@
 aiohttp>=3.8.0
 emoji>=2.8.0
+silk-python>=0.2.8
+audioop-lts; python_version >= "3.13"
