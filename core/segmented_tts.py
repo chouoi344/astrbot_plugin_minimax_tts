@@ -60,6 +60,7 @@ class SegmentTTSResult:
     duration_seconds: float = 0.0
     success: bool = False
     error: str = ""
+    failure_stage: str = ""
 
 
 @dataclass
@@ -72,6 +73,11 @@ class SegmentedTTSResult:
     speed: float = 1.0
     success: bool = False
     error: str = ""
+    total_segments: int = 0
+
+    @property
+    def skipped_count(self) -> int:
+        return max(0, self.total_segments - len(self.segments))
 
     @property
     def successful_segments(self) -> List[SegmentTTSResult]:
@@ -217,6 +223,7 @@ class SegmentedTTSProcessor:
         try:
             # 1. 分段
             segments = self.splitter.split(text)
+            result.total_segments = len(segments)
             if not segments:
                 result.error = "no segments after splitting"
                 return result
@@ -248,6 +255,7 @@ class SegmentedTTSProcessor:
 
                 if segment.is_empty:
                     seg_result.error = "empty segment after boundary pause cleanup"
+                    seg_result.failure_stage = "synthesis"
                     result.segments.append(seg_result)
                     continue
 
@@ -261,6 +269,7 @@ class SegmentedTTSProcessor:
 
                     if not audio_path:
                         seg_result.error = "audio generation failed"
+                        seg_result.failure_stage = "synthesis"
                         result.segments.append(seg_result)
                         continue
 
@@ -270,7 +279,15 @@ class SegmentedTTSProcessor:
                     duration = await get_audio_duration(audio_path)
                     seg_result.duration_seconds = duration
 
-                    # 发送
+                except Exception as e:
+                    seg_result.error = str(e) or type(e).__name__
+                    seg_result.failure_stage = "synthesis"
+                    logger.error(f"SegmentedTTS: segment {i + 1} generation error: {e}")
+                    result.segments.append(seg_result)
+                    continue
+
+                try:
+                    # 发送失败后停止后续合成与发送，避免重复投递和无效计费。
                     norm_path = self.tts_processor.normalize_audio_path(audio_path)
                     send_success = await send_func(Path(norm_path))
 
@@ -281,15 +298,20 @@ class SegmentedTTSProcessor:
                         )
                     else:
                         seg_result.error = "send failed"
+                        seg_result.failure_stage = "delivery"
                         logger.warning(
                             f"SegmentedTTS: segment {i + 1}/{len(segments)} send failed"
                         )
 
                 except Exception as e:
-                    seg_result.error = str(e)
-                    logger.error(f"SegmentedTTS: segment {i + 1} processing error: {e}")
+                    seg_result.error = str(e) or type(e).__name__
+                    seg_result.failure_stage = "delivery"
+                    logger.error(f"SegmentedTTS: segment {i + 1} delivery error: {e}")
 
                 result.segments.append(seg_result)
+                if seg_result.failure_stage == "delivery":
+                    result.error = seg_result.error
+                    break
 
                 # 如果不是最后一段，等待间隔
                 if i < len(segments) - 1:
@@ -334,6 +356,7 @@ class SegmentedTTSProcessor:
         try:
             # 1. 分段
             segments = self.splitter.split(text)
+            result.total_segments = len(segments)
             if not segments:
                 result.error = "no segments after splitting"
                 return result

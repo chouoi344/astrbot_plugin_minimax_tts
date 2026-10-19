@@ -13,7 +13,7 @@ PLUGIN_NAME = "MiniMax 语音助手"
 PLUGIN_DESC = (
     "通过终逢小站调用 MiniMax，内置角色音色，支持高质量语音、分段发送和语言选择。"
 )
-PLUGIN_VERSION = "0.1.12"
+PLUGIN_VERSION = "0.1.13"
 PLUGIN_AUTHOR = "臭屁"
 
 # Paths
