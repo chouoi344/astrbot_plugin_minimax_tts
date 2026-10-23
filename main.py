@@ -50,7 +50,6 @@ from .core.constants import (
     TEMP_DIR,
 )
 from .core.marker import EmotionMarkerProcessor
-from .core.qq_voice import QQVoiceError, build_voice_record, is_qq_event
 from .core.segmented_tts import SegmentedTTSProcessor
 from .core.session import SessionState
 from .core.text_splitter import TextSplitter
@@ -387,10 +386,10 @@ class MiniMaxTTSPlugin(Star):
             model=str(api_cfg.get("model", "")),
         )
 
-    async def _build_record_only_chain(
-        self, event: AstrMessageEvent, original_chain: List, audio_paths: List[str]
+    def _build_record_only_chain(
+        self, original_chain: List, audio_paths: List[str]
     ) -> List:
-        chain: List = [await build_voice_record(event, path) for path in audio_paths]
+        chain: List = [Record(file=path) for path in audio_paths]
         for comp in original_chain:
             if not isinstance(comp, Plain):
                 chain.append(comp)
@@ -460,99 +459,18 @@ class MiniMaxTTSPlugin(Star):
                 if seg.audio_path
             ]
             if audio_paths:
-                try:
-                    chain = [
-                        await build_voice_record(event, path) for path in audio_paths
-                    ]
-                except QQVoiceError as exc:
-                    return False, [], f"QQ 语音编码失败：{exc}"
-                return True, chain, prepared.display_text or tts_text
+                return (
+                    True,
+                    [Record(file=path) for path in audio_paths],
+                    prepared.display_text or tts_text,
+                )
             return False, [], f"TTS 合成失败：{seg_res.error or '分段合成失败'}"
 
         proc_res = await self.tts_processor.process(tts_text, st)
         if not proc_res.success or not proc_res.audio_path:
             return False, [], f"TTS 合成失败：{proc_res.error or '未知错误'}"
         audio_path = self.tts_processor.normalize_audio_path(proc_res.audio_path)
-        try:
-            record = await build_voice_record(event, audio_path)
-        except QQVoiceError as exc:
-            return False, [], f"QQ 语音编码失败：{exc}"
-        return True, [record], prepared.display_text or tts_text
-
-    @staticmethod
-    def _describe_voice_send_error(error: str) -> str:
-        lowered = error.lower()
-        if "ntsilk_s16le" in lowered:
-            return "NapCat 的语音转码组件不可用，请检查 NapCat 的配套 FFmpeg 组件。"
-        if "ffprobe" in lowered:
-            return "NapCat 无法读取语音时长，请检查 NapCat 的配套音频组件。"
-        if "QQ 语音" in error or "腾讯 SILK" in error or "WAV 语音" in error:
-            return error[:500]
-        detail = error[:500] or "发送接口未确认成功，请查看 AstrBot 日志。"
-        return f"{detail} 该段可能已送达，请勿自动重发。"
-
-    async def _send_manual_voice(
-        self, event: AstrMessageEvent, content: str
-    ) -> Optional[str]:
-        """Send each voice once and report synthesis/delivery failures separately."""
-        await self._start_background_tasks()
-        prepared = self._prepare_text_for_tts(content)
-        tts_text = (prepared.tts_text or "").strip()
-        if not tts_text:
-            return "没有可用于语音合成的文本。"
-
-        sid = self._get_umo(event)
-        st = self._get_session_state(sid)
-        if self._should_use_segmented_tts(sid, tts_text):
-
-            async def _send_segment(audio_path) -> bool:
-                record = await build_voice_record(event, audio_path)
-                await event.send(event.chain_result([record]))
-                return True
-
-            seg_res = await self.segmented_tts_processor.process_and_send(
-                tts_text, st, _send_segment
-            )
-            successful_count = len(seg_res.successful_segments)
-            failed_segments = [seg for seg in seg_res.segments if not seg.success]
-            if failed_segments:
-                failed = next(
-                    (seg for seg in failed_segments if seg.failure_stage == "delivery"),
-                    failed_segments[0],
-                )
-                stage = "发送" if failed.failure_stage == "delivery" else "合成"
-                detail = (
-                    self._describe_voice_send_error(failed.error)
-                    if stage == "发送"
-                    else failed.error
-                )
-                message = (
-                    f"语音未全部完成：已确认发送 {successful_count}/{seg_res.total_segments} 段，"
-                    f"第 {failed.segment.index + 1} 段{stage}失败：{detail}"
-                )
-                if seg_res.skipped_count:
-                    message += f" 后续 {seg_res.skipped_count} 段已停止生成和发送。"
-                if successful_count:
-                    message += " 不要重复发送已成功的语音。"
-                return message
-            if not successful_count:
-                return f"TTS 合成失败：{seg_res.error or '分段合成失败'}"
-            if seg_res.error or successful_count < seg_res.total_segments:
-                return (
-                    f"语音未全部完成：已确认发送 {successful_count}/{seg_res.total_segments} 段。"
-                    "请查看 AstrBot 日志，不要重复发送已成功的语音。"
-                )
-            return None
-
-        ok, chain, error_message = await self._build_manual_tts_chain(event, content)
-        if not ok:
-            return error_message
-        try:
-            await event.send(event.chain_result(chain))
-        except Exception as exc:
-            logger.error("voice send failed: %s", exc)
-            return f"语音发送失败：{self._describe_voice_send_error(str(exc))}"
-        return None
+        return True, [Record(file=audio_path)], prepared.display_text or tts_text
 
     @filter.on_llm_request()
     async def on_llm_request(self, event: AstrMessageEvent, request):
@@ -664,8 +582,8 @@ class MiniMaxTTSPlugin(Star):
                     if seg.audio_path
                 ]
                 if audio_paths:
-                    result.chain = await self._build_record_only_chain(
-                        event, result.chain, audio_paths
+                    result.chain = self._build_record_only_chain(
+                        result.chain, audio_paths
                     )
                     return
 
@@ -674,9 +592,7 @@ class MiniMaxTTSPlugin(Star):
                 audio_path = self.tts_processor.normalize_audio_path(
                     proc_res.audio_path
                 )
-                result.chain = await self._build_record_only_chain(
-                    event, result.chain, [audio_path]
-                )
+                result.chain = self._build_record_only_chain(result.chain, [audio_path])
         finally:
             self._inflight_sigs.pop(sig, None)
 
@@ -754,11 +670,6 @@ class MiniMaxTTSPlugin(Star):
     @filter.command("tts_say", priority=1)
     async def tts_say(self, event: AstrMessageEvent, *, text: Optional[str] = None):
         content = (text or DEFAULT_TEST_TEXT).strip() or DEFAULT_TEST_TEXT
-        if is_qq_event(event):
-            error_message = await self._send_manual_voice(event, content)
-            if error_message:
-                yield event.plain_result(error_message)
-            return
         ok, chain, message = await self._build_manual_tts_chain(event, content)
         if not ok:
             yield event.plain_result(message)
@@ -789,10 +700,52 @@ class MiniMaxTTSPlugin(Star):
                 yield "文本为空"
                 return
 
-            error_message = await self._send_manual_voice(event, content)
-            if error_message:
-                yield error_message
+            prepared = self._prepare_text_for_tts(content)
+            tts_text = (prepared.tts_text or "").strip()
+            if not tts_text:
+                yield "没有可用于语音合成的文本。"
                 return
+
+            sid = self._get_umo(event)
+            st = self._get_session_state(sid)
+
+            if self._should_use_segmented_tts(sid, tts_text):
+
+                async def _send_segment(audio_path) -> bool:
+                    await event.send(event.chain_result([Record(file=str(audio_path))]))
+                    return True
+
+                seg_res = await self.segmented_tts_processor.process_and_send(
+                    tts_text,
+                    st,
+                    _send_segment,
+                )
+                successful_count = len(seg_res.successful_segments)
+                if not successful_count:
+                    yield f"TTS 合成失败：{seg_res.error or '分段发送失败'}"
+                    return
+
+                failed_count = len(seg_res.segments) - successful_count
+                if failed_count:
+                    logger.warning(
+                        "tts_speak segmented send partially failed: sent=%s failed=%s",
+                        successful_count,
+                        failed_count,
+                    )
+            else:
+                ok, chain, error_message = await self._build_manual_tts_chain(
+                    event, content
+                )
+                if not ok:
+                    yield error_message
+                    return
+
+                try:
+                    await event.send(event.chain_result(chain))
+                except Exception as exc:
+                    logger.error("tts_speak send failed: %s", exc)
+                    yield f"发送失败：{exc}"
+                    return
 
             if hasattr(event, "clear_result"):
                 try:
